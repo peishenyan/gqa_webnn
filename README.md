@@ -72,5 +72,6 @@ attention_bias's caculation
 In onnxruntime, we create a pull request: https://github.com/microsoft/onnxruntime/pull/23416. The GQA details for WebNN EP is in `onnxruntime/core/providers/webnn/builders/impl/attention_op_builder.cc`.
 
 ## Test Example
-1. `gqa.html` uses WebNN api to compute GQA in a decomposed graph, compared to onnxruntime-web CPU EP execution result of a GQA onnx graph.
-2. `benchmark_GQA_prefill.html` and `benchmark_GQA_decode.html` are two test cases for prefilling and decoding stages of a GQA onnx graph, comparing the results of onnxruntime WebNN EP and CPU EP. 
+Github Pages: https://peishenyan.github.io/gqa_webnn/
+1. [`gqa.html`](https://peishenyan.github.io/gqa_webnn/gqa.html) uses WebNN api to compute GQA in a decomposed graph, compared to onnxruntime-web CPU EP execution result of a GQA onnx graph.
+2. [`benchmark_GQA_prefill.html`](https://peishenyan.github.io/gqa_webnn/benchmark_GQA_prefill.html) and [`benchmark_GQA_decode.html`](https://peishenyan.github.io/gqa_webnn/benchmark_GQA_decode.html) are two test cases for prefilling and decoding stages of a GQA onnx graph, comparing the results of onnxruntime WebNN EP and CPU EP. 

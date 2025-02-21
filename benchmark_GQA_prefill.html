@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+ 
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Document</title>
+</head>
+ 
+<body>
+<button onclick="trans" id="start">start</button>
+<p id=log></p>
+<script src="./onnxruntime-web/dist/ort.all.min.js"></script>
+  <!-- <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0-dev.20241207-6d9636f07c/dist/ort.all.js"></script> -->
+<script>
+        ort.env.wasm.simd = true
+        ort.env.wasm.proxy = false
+        ort.env.wasm.numThreads = 0
+        const log = document.getElementById('log');
+        async function run(message) {
+            let model_path = message[0];
+            log.innerHTML = 'start running model ' + model_path;
+            let input = message[1];
+            let outputs = message[2];
+            let dim = message[3];
+            var feeds = {}
+            var feeds1 = {}
+            const genRandomArr = (num) =>
+            // Array.from({ length: num }, (v,k) => k);
+                Array.from({ length: num }, () => Math.random());
+
+            if (typeof input == 'object') {
+                for (let index = 0; index < input.length; index++) {
+                    const element = input[index];
+                    const dim_ = dim[index]
+                    if (index > 4) {
+                        if (index == 5) {
+                            inputTensor = new ort.Tensor(
+                                "int32",
+                                new Int32Array([0]),
+                                dim_
+                            );
+                            inputTensor1 = new ort.Tensor(
+                                "int32",
+                                new Int32Array(inputTensor["data"]),
+                                dim_
+                            );
+                        } else {
+                            inputTensor = new ort.Tensor(
+                                "int32",
+                                new Int32Array(Array.from({ length: dim_.reduce((pre, cur) => pre * cur) }, () => 0)),
+                                dim_
+                            );
+                            inputTensor1 = new ort.Tensor(
+                                "int32",
+                                new Int32Array(inputTensor["data"]),
+                                dim_
+                            );
+                        }
+                    }
+                    else {
+                        inputTensor = new ort.Tensor(
+                            "float32",
+                            new Float32Array(genRandomArr(dim_.reduce((pre, cur) => pre * cur))),
+                            dim_
+                        );
+                        inputTensor1 = new ort.Tensor(
+                            "float32",
+                            new Float32Array(inputTensor["data"]),
+                            dim_
+                        );
+                    }
+                    feeds[element] = inputTensor
+                    feeds1[element] = inputTensor1
+                    console.log("input", inputTensor)
+                }
+            } else {
+                inputTensor = new ort.Tensor(
+                    "float32",
+                    new Float32Array(genRandomArr(dim.reduce((pre, cur) => pre * cur))),
+                    dim
+                );
+                inputTensor1 = new ort.Tensor(
+                    "float32",
+                    new Float32Array(inputTensor["data"]),
+                    dim
+                );
+                feeds = { [input]: inputTensor };
+                feeds1 = { [input]: inputTensor1 };
+                console.log("input", feeds1);
+            }
+            console.log('Creating session for webnn ep....');
+            session_webnn = await ort.InferenceSession.create(model_path, {
+                executionProviders: [{ name: "webnn", deviceType: "gpu", powerPreference: "default" }],
+                logSeverityLevel: 0,
+                freeDimensionOverrides: { "batch_size": 1, "sequence_length": 25, "past_sequence_length": 256, "total_sequence_length": 25 },
+            });
+            console.log('...done.'); 
+            console.log('Creating session for cpu ep....');
+            session = await ort.InferenceSession.create(model_path, {
+                executionProviders: [{ name: "wasm", deviceType: 0, powerPreference: 1 }],
+                // logSeverityLevel: 0,
+            });
+            console.log('...done.');
+            const results = await session.run(feeds);
+            console.log('cpu ep results: ', results);
+            const results_webnn = await session_webnn.run(feeds1);
+            console.log('webnn ep results: ', results_webnn);
+            console.log("finished run for", message[0]);
+            outputs.forEach(output => {
+                if (typeof output == 'object') {
+                    console.log("finished run for", message[0])
+                    for (const key in output) {
+                        result1 = results[output[key]].data;
+                        result2 = results_webnn[output[key]].data;
+                        let epsilon = 1e-5;
+                        difference = result1.map((x, i) => Math.abs(x - result2[i]))
+                        testResult = result1.every((x, i) => Math.abs(x - result2[i]) < epsilon);
+                        console.assert(testResult, result1, result2, difference, difference.sort())
+                        console.log(result1.map((x, i) => x - result2[i]).sort());
+                    }
+                } else {
+                    result1 = results[output].data;
+                    result2 = results_webnn[output].data;
+                    let epsilon = 2e-5;
+                    difference = result1.map((x, i) => Math.abs(x - result2[i]))
+                    testResult = difference.every((x) => x < epsilon);
+                    console.log(difference.sort())
+                }
+            });
+            
+ 
+            log.innerHTML = "Run done.";
+        };
+ 
+        async function main() {
+            await run(['./models/GQA.onnx', ['query', 'key', 'value', 'past_key', 'past_value', 'seqlens_k', 'attention_mask'], ['output', 'present_key', 'present_value'], [[1,25,3072],[1,25,3072],[1,25,3072],[1,32,256,96],[1,32,256,96],[1],[25]]])
+        }
+        const start = document.getElementById('start');
+        start.onclick = async () => {
+            await main();
+        }
+</script>
+ 
+</body>
+ 
+</html>

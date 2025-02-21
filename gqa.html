@@ -337,7 +337,7 @@
         console.log('value: ', present_value_result);
 
 
-        const sess = await ort.InferenceSession.create('./models/GQA_cpu.onnx');
+        const sess = await ort.InferenceSession.create('./models/GQA.onnx');
         let feed = {};
         feed['query'] = new ort.Tensor('float32', query_buffer, query_key_value_desc.shape);
         feed['key'] = new ort.Tensor('float32', key_buffer, query_key_value_desc.shape);

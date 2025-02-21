@@ -49,7 +49,7 @@
                         } else {
                             inputTensor = new ort.Tensor(
                                 "int32",
-                                new Int32Array(Array.from({ length: dim_.reduce((pre, cur) => pre * cur) }, () => 0)),
+                                new Int32Array([256]),
                                 dim_
                             );
                             inputTensor1 = new ort.Tensor(
@@ -134,7 +134,7 @@
         };
  
         async function main() {
-            await run(['./models/GQA.onnx', ['query', 'key', 'value', 'past_key', 'past_value', 'seqlens_k', 'attention_mask'], ['output', 'present_key', 'present_value'], [[1,1,3072],[1,1,3072],[1,1,3072],[1,32,256,96],[1,32,256,96],[1],[256]]])
+            await run(['./models/GQA.onnx', ['query', 'key', 'value', 'past_key', 'past_value', 'seqlens_k', 'total_seq_len'], ['output', 'present_key', 'present_value'], [[1,1,3072],[1,1,3072],[1,1,3072],[1,32,256,96],[1,32,256,96],[1],[]]])
         }
         const start = document.getElementById('start');
         start.onclick = async () => {

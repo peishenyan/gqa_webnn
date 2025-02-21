@@ -77,4 +77,4 @@ Github Pages: https://peishenyan.github.io/gqa_webnn/
 2. [`benchmark_GQA_prefill.html`](https://peishenyan.github.io/gqa_webnn/benchmark_GQA_prefill.html) and [`benchmark_GQA_decode.html`](https://peishenyan.github.io/gqa_webnn/benchmark_GQA_decode.html) are two test cases for prefilling and decoding stages of a GQA onnx graph, comparing the results of onnxruntime WebNN EP and CPU EP. 
 
 ## Decomposed Graph of GQA
-`models/GQA_decomposed_seq_25.onnx' and `models/GQA_decomposed_seq_1.onnx' are the decomposed graphs of the GQA operator in the prefilling and decoding stages, respectively.
+`models/GQA_decomposed_seq_25.onnx` and `models/GQA_decomposed_seq_1.onnx` are the decomposed graphs of the GQA operator in the prefilling and decoding stages, respectively.

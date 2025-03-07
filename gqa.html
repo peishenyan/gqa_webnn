@@ -173,18 +173,15 @@
         // value -> Reshape (/GQA/value/reshape_1)
         const value_for_scatter = builder.reshape(value_input, reshape_kv_shape, {label: '/GQA/value/reshape_1'});
 
-        // seqlens_k -> Cast ()
-        const seqlens_k_casted = builder.cast(seqlens_k_input, 'int64', {label: 'seqlens_k_casted'});
-
         // Gather -> Less (/GQA/scatter/condition)
         const condition_buffer = new Uint8Array(1);
         if (1 < qkv_sequence_length) {
           condition_buffer.set([1]);
         }
         const scatter_condition = builder.constant({dataType: 'uint8', shape: [1]}, condition_buffer);
-        const value_zero = builder.constant({dataType: 'int64', shape: [1]}, new BigInt64Array(1));
+        const value_zero = builder.constant({dataType: 'int32', shape: [1]}, new Int32Array(1));
         // Less -> Where (/GQA/scatter/where)
-        const scatter_pos = builder.where(scatter_condition, value_zero, seqlens_k_casted, {label: '/GQA/scatter/where'});
+        const scatter_pos = builder.where(scatter_condition, value_zero, seqlens_k_input, {label: '/GQA/scatter/where'});
         // Where -> Add (/GQA/reshaped_qkv_sequence_length_shape/add)
         const reshaped_qkv_sequence_length_shape_plus = builder.add(right, scatter_pos, {label: '/GQA/reshaped_qkv_sequence_length_shape/add'});
         // Add -> Concat (/GQA/scatter)
@@ -222,7 +219,7 @@
         //= [batch_size, num_heads, qkv_sequence_length, past_sequence_length]
         // Div -> Shape -> ConstantOfShape (/GQA/attn_mask/one_of_mask_shape)
         const mask_shape_ones_shape = [batch_size, num_heads, qkv_sequence_length, past_sequence_length];
-        const mask_shape_ones = builder.constant({dataType: 'int64', shape: mask_shape_ones_shape}, generateBuffer('int64', mask_shape_ones_shape, 1));
+        const mask_shape_ones = builder.constant({dataType: 'int32', shape: mask_shape_ones_shape}, generateBuffer('int32', mask_shape_ones_shape, 1));
         // ConstantOfShape -> CumSum (range_of_mask_shape), axis=-1
         const neq_left = builder.cumulativeSum(mask_shape_ones, 3, {exclusive: true, reversed: false, label: 'range_of_mask_shape'});
         console.log('neq_left shape: ', neq_left.shape);
@@ -232,9 +229,9 @@
         const reshape_pre_neq_right = [past_kv_lens, qkv_sequence_length];        
         // ConstantOfShape -> CumSum (/GQA/attn_mask/range_of_qkv_sequence_length)
         const _pre_neq_right_data = cumsum(qkv_sequence_length, false);
-        const _pre_neq_right_buffer = new BigInt64Array(qkv_sequence_length);
+        const _pre_neq_right_buffer = new Int32Array(qkv_sequence_length);
         _pre_neq_right_buffer.set(_pre_neq_right_data);
-        const _pre_neq_right = builder.constant({dataType: 'int64', shape: [qkv_sequence_length]}, _pre_neq_right_buffer);
+        const _pre_neq_right = builder.constant({dataType: 'int32', shape: [qkv_sequence_length]}, _pre_neq_right_buffer);
         // CumSum  -> Add (/GQA/attn_mask/add)
         const pre_neq_right = builder.add(_pre_neq_right, scatter_pos, {label: '/GQA/attn_mask/add'});
         // Add -> Expand (/GQA/expand_neq_right)
@@ -242,14 +239,6 @@
         // Expand -> Transpose (/GQA/neq_right/transpose) (1, 0)
         const neq_right = builder.transpose(expanded_neq_right, {label: '/GQA/neq_right/transpose'});
         
-        // const neq_right_buffer = new BigInt64Array(past_sequence_length * qkv_sequence_length);
-        // for (let i = 0; i < qkv_sequence_length; i++) {
-        //   for (let j = 0; j < past_sequence_length; j++) {
-        //     neq_right_buffer[i * past_sequence_length + j] = BigInt(i+1);
-        //   }
-        // }
-        // const neq_right = builder.constant({dataType: 'int64', shape: [qkv_sequence_length, past_sequence_length]},
-        //     neq_right_buffer);
 
         // CumSum -> Less (/GQA/attn_mask/condition)
         const condition = builder.lesser(neq_left, neq_right, {label: '/GQA/attn_mask/condition'});
@@ -428,9 +417,9 @@
       const output = [];
       for (let i = 0; i < size; i++) {
           if (exclusive) {
-              output.push(BigInt(i));
+              output.push(i);
           } else {
-              output.push(BigInt(i+1));
+              output.push(i+1);
           }
       }
       return output;
@@ -442,15 +431,15 @@
       for (let i = 0; i < sequence_length; i++) {
         for (let j = 0; j < batch_size; j++) {
           for (let k = 0; k < num_heads; k ++) {
-            input[2 * i * batch_size * num_heads + 2 * j * num_heads + 2 * k] = BigInt(j);
-            input[2 * i * batch_size * num_heads + 2 * j * num_heads + 2 * k + 1] = BigInt(k);
+            input[2 * i * batch_size * num_heads + 2 * j * num_heads + 2 * k] = j;
+            input[2 * i * batch_size * num_heads + 2 * j * num_heads + 2 * k + 1] = k;
           }
         }
       }
-      const buffer = new BigInt64Array(num_elements);
+      const buffer = new Int32Array(num_elements);
       buffer.set(input);
       const new_shape = [batch_size * sequence_length * num_heads, 2];
-      return builder.constant({dataType: 'int64', shape: new_shape}, buffer);
+      return builder.constant({dataType: 'int32', shape: new_shape}, buffer);
     }
     function repeat_sequence(builder, batch_size, num_heads, sequence_length) {
       const num_elements = sizeOfShape([batch_size * num_heads * sequence_length]);
@@ -459,14 +448,14 @@
       for (let i = 0; i < sequence_length; i++) {
         for (let j = 0; j < batch_size; j++) {
           for (let k = 0; k < num_heads; k ++) {
-            input[i * batch_size * num_heads + j * num_heads + k] = BigInt(i);
+            input[i * batch_size * num_heads + j * num_heads + k] = i;
           }
         }
       }
-      const buffer = new BigInt64Array(num_elements);
+      const buffer = new Int32Array(num_elements);
       buffer.set(input);
       const new_shape = [batch_size * sequence_length * num_heads, 1];
-      return builder.constant({dataType: 'int64', shape: new_shape}, buffer);
+      return builder.constant({dataType: 'int32', shape: new_shape}, buffer);
     }
     function flatten(array) {
       return array.reduce((acc, val) => acc.concat(Array.isArray(val) ? flatten(val) : val), []);

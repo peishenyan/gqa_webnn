@@ -12,7 +12,6 @@
 <button onclick="trans" id="start">start</button>
 <p id=log></p>
 <script src="./onnxruntime-web/dist/ort.all.min.js"></script>
-  <!-- <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0-dev.20241207-6d9636f07c/dist/ort.all.js"></script> -->
 <script>
         ort.env.wasm.simd = true
         ort.env.wasm.proxy = false
@@ -27,8 +26,21 @@
             var feeds = {}
             var feeds1 = {}
             const genRandomArr = (num) =>
-            // Array.from({ length: num }, (v,k) => k);
                 Array.from({ length: num }, () => Math.random());
+            const genPastArr = (dim, k) => {
+                let totalLen = dim.reduce((pre, cur) => pre * cur);
+                let arr = new Array(totalLen).fill(0);
+                for(let i = 0; i < dim[0]; i++) {
+                    for(let j = 0; j < dim[1]; j++) {
+                        for(let l = 0; l < k; l++) {
+                            for(let m = 0; m < dim[3]; m++) {
+                                arr[i*dim[1]*dim[2]*dim[3]+j*dim[2]*dim[3]+l*dim[3]+m] = Math.random();
+                            }                            
+                        }
+                    }
+                }
+                return arr;
+            };
 
             if (typeof input == 'object') {
                 for (let index = 0; index < input.length; index++) {
@@ -58,6 +70,17 @@
                                 dim_
                             );
                         }
+                    } else if (index > 2) {
+                        inputTensor = new ort.Tensor(
+                            "float32",
+                            new Float32Array(genPastArr(dim_, 25)),
+                            dim_
+                        );
+                        inputTensor1 = new ort.Tensor(
+                            "float32",
+                            new Float32Array(inputTensor["data"]),
+                            dim_
+                        );
                     } else {
                         inputTensor = new ort.Tensor(
                             "float32",
@@ -108,25 +131,12 @@
             console.log('webnn ep results: ', results_webnn);
             console.log("finished run for", message[0]);
             outputs.forEach(output => {
-                if (typeof output == 'object') {
-                    console.log("finished run for", message[0])
-                    for (const key in output) {
-                        result1 = results[output[key]].data;
-                        result2 = results_webnn[output[key]].data;
-                        let epsilon = 1e-5;
-                        difference = result1.map((x, i) => Math.abs(x - result2[i]))
-                        testResult = result1.every((x, i) => Math.abs(x - result2[i]) < epsilon);
-                        console.assert(testResult, result1, result2, difference, difference.sort())
-                        console.log(result1.map((x, i) => x - result2[i]).sort());
-                    }
-                } else {
-                    result1 = results[output].data;
-                    result2 = results_webnn[output].data;
-                    let epsilon = 2e-5;
-                    difference = result1.map((x, i) => Math.abs(x - result2[i]))
-                    testResult = difference.every((x) => x < epsilon);
-                    console.log(difference.sort())
-                }
+                result1 = results[output].data;
+                result2 = results_webnn[output].data;
+                let epsilon = 2e-5;
+                difference = result1.map((x, i) => Math.abs(x - result2[i]))
+                testResult = difference.every((x) => x < epsilon);
+                console.log(difference.sort().reverse())
             });
             
  
@@ -134,7 +144,7 @@
         };
  
         async function main() {
-            await run(['./models/GQA.onnx', ['query', 'key', 'value', 'past_key', 'past_value', 'seqlens_k', 'total_seq_len'], ['output', 'present_key', 'present_value'], [[1,1,3072],[1,1,3072],[1,1,3072],[1,32,256,96],[1,32,256,96],[1],[]]])
+            await run(['./models/GQA_const.onnx', ['query', 'key', 'value', 'past_key', 'past_value', 'seqlens_k'], ['output', 'present_key', 'present_value'], [[1,1,3072],[1,1,3072],[1,1,3072],[1,32,256,96],[1,32,256,96],[1]]])
         }
         const start = document.getElementById('start');
         start.onclick = async () => {

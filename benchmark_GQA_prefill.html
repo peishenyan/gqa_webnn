@@ -12,7 +12,6 @@
 <button onclick="trans" id="start">start</button>
 <p id=log></p>
 <script src="./onnxruntime-web/dist/ort.all.min.js"></script>
-  <!-- <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0-dev.20241207-6d9636f07c/dist/ort.all.js"></script> -->
 <script>
         ort.env.wasm.simd = true
         ort.env.wasm.proxy = false
@@ -27,8 +26,9 @@
             var feeds = {}
             var feeds1 = {}
             const genRandomArr = (num) =>
-            // Array.from({ length: num }, (v,k) => k);
                 Array.from({ length: num }, () => Math.random());
+            const genZeroArr = (num) =>
+                Array.from({ length: num }, () => 0);
 
             if (typeof input == 'object') {
                 for (let index = 0; index < input.length; index++) {
@@ -38,7 +38,7 @@
                         if (index == 5) {
                             inputTensor = new ort.Tensor(
                                 "int32",
-                                new Int32Array([0]),
+                                new Int32Array([255]),
                                 dim_
                             );
                             inputTensor1 = new ort.Tensor(
@@ -49,7 +49,8 @@
                         } else {
                             inputTensor = new ort.Tensor(
                                 "int32",
-                                new Int32Array([25]),
+                                // new Int32Array([256]),
+                                new Int32Array([256]),
                                 dim_
                             );
                             inputTensor1 = new ort.Tensor(
@@ -58,6 +59,18 @@
                                 dim_
                             );
                         }
+                    }
+                    else if (index > 2) {
+                        inputTensor = new ort.Tensor(
+                            "float32",
+                            new Float32Array(genZeroArr(dim_.reduce((pre, cur) => pre * cur))),
+                            dim_
+                        );
+                        inputTensor1 = new ort.Tensor(
+                            "float32",
+                            new Float32Array(inputTensor["data"]),
+                            dim_
+                        );
                     }
                     else {
                         inputTensor = new ort.Tensor(
@@ -94,7 +107,7 @@
             session_webnn = await ort.InferenceSession.create(model_path, {
                 executionProviders: [{ name: "webnn", deviceType: "gpu", powerPreference: "default" }],
                 logSeverityLevel: 0,
-                freeDimensionOverrides: { "batch_size": 1, "sequence_length": 25, "past_sequence_length": 256, "total_sequence_length": 25 },
+                freeDimensionOverrides: { "batch_size": 1, "sequence_length": 256, "past_sequence_length": 256, "total_sequence_length": 256 },
             });
             console.log('...done.'); 
             console.log('Creating session for cpu ep....');
@@ -109,25 +122,12 @@
             console.log('webnn ep results: ', results_webnn);
             console.log("finished run for", message[0]);
             outputs.forEach(output => {
-                if (typeof output == 'object') {
-                    console.log("finished run for", message[0])
-                    for (const key in output) {
-                        result1 = results[output[key]].data;
-                        result2 = results_webnn[output[key]].data;
-                        let epsilon = 1e-5;
-                        difference = result1.map((x, i) => Math.abs(x - result2[i]))
-                        testResult = result1.every((x, i) => Math.abs(x - result2[i]) < epsilon);
-                        console.assert(testResult, result1, result2, difference, difference.sort())
-                        console.log(result1.map((x, i) => x - result2[i]).sort());
-                    }
-                } else {
-                    result1 = results[output].data;
-                    result2 = results_webnn[output].data;
-                    let epsilon = 2e-5;
-                    difference = result1.map((x, i) => Math.abs(x - result2[i]))
-                    testResult = difference.every((x) => x < epsilon);
-                    console.log(difference.sort())
-                }
+                result1 = results[output].data;
+                result2 = results_webnn[output].data;
+                let epsilon = 2e-5;
+                difference = result1.map((x, i) => Math.abs(x - result2[i]))
+                testResult = difference.every((x) => x < epsilon);
+                console.log(difference.sort().reverse())
             });
             
  
@@ -135,7 +135,7 @@
         };
  
         async function main() {
-            await run(['./models/GQA.onnx', ['query', 'key', 'value', 'past_key', 'past_value', 'seqlens_k', 'total_seq_len'], ['output', 'present_key', 'present_value'], [[1,25,3072],[1,25,3072],[1,25,3072],[1,32,256,96],[1,32,256,96],[1],[]]])
+            await run(['./models/GQA_const.onnx', ['query', 'key', 'value', 'past_key', 'past_value', 'seqlens_k'], ['output', 'present_key', 'present_value'], [[1,256,3072],[1,256,3072],[1,256,3072],[1,32,256,96],[1,32,256,96],[1]]])
         }
         const start = document.getElementById('start');
         start.onclick = async () => {

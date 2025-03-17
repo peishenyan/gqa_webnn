@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GroupQueryAttention Decomposed Model Test</title>
+</head>
+<style>
+  body {
+    font-family: sans-serif;
+    padding: 20px;
+  }
+
+  h1 {
+    color: #425066;
+    font-size: 31px;
+    margin-top: 0;
+  }
+
+  .loading-stats {
+    color: #aaa;
+    font-size: 12px;
+    margin-top: -12px;
+  }
+
+  .hide {
+    display: none;
+  }
+
+  .content {
+    margin-top: 30px;
+  }
+
+  div {
+    margin-top: 20px;
+  }
+</style>
+
+<body>
+  <!-- Loading status -->
+  <div class="loading-stats">click 'Run'...</div>
+  <div>
+    <input type="button" value="Run" id="run" />
+  </div>
+  <div id="status" style="font: 1em sans-serif"></div>
+  <!-- <script src="../onnxruntime-web/dist/ort.all.js"></script> -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.all.min.js"></script>
+  <script type="module">
+    import { buildConstantByNpy, toHalf, sizeOfShape } from './utils.js';
+
+    function log(i) {
+      console.log(i);
+      document.getElementById("status").innerText +=
+        `\n[${performance.now().toFixed(3)}] ` + i;
+    }
+
+    async function run(dataType = 'float32', sequence_length = 1, group_size = 8) {
+      log("entering run ...");
+      try {
+        const context = await navigator.ml.createContext({ deviceType: 'gpu' });
+        const builder = new MLGraphBuilder(context);
+        const batch_size = 1;
+        // const sequence_length = 25;
+        const total_sequence_length = 256;
+        const past_sequence_length = 256;
+        const num_heads = 32;
+        let head_size = 96;
+        let kv_num_heads = 32;
+        let hidden_size = 3072;
+        let kv_hidden_size = 3072;
+        if (group_size == 8) {
+          head_size = 64;
+          kv_num_heads = 4;
+          kv_hidden_size = 256;
+          hidden_size = 2048;
+        }
+
+        let seqlens_k_value;
+        let total_seq_len;
+        if (sequence_length != 1) {
+          seqlens_k_value = 255;
+          total_seq_len = total_sequence_length;
+        } else {
+          seqlens_k_value = 25;
+          total_seq_len = total_sequence_length;
+        }
+
+        // ml-tensor desc for query, key, value inputs
+        const query_desc = {
+          dataType,
+          shape: [batch_size, sequence_length, hidden_size],
+        };
+        const key_value_desc = {
+          dataType,
+          shape: [batch_size, sequence_length, kv_hidden_size],
+        };
+        // ml-tensor desc for past_key and past_value
+        const past_key_value_desc = {
+          dataType,
+          shape: [batch_size, kv_num_heads, past_sequence_length, head_size],
+        };
+        const seqlens_k_desc = {
+          dataType: 'int32',
+          shape: [batch_size],
+        };
+        const total_seq_len_desc = {
+          dataType: 'int32',
+          shape: [1],
+        };
+
+        // Create input tensors
+        const query_tensor = await context.createTensor({ ...query_desc, writable: true });
+        const key_tensor = await context.createTensor({ ...key_value_desc, writable: true });
+        const value_tensor = await context.createTensor({ ...key_value_desc, writable: true });
+        const past_key_tensor = await context.createTensor({ ...past_key_value_desc, writable: true });
+        const past_value_tensor = await context.createTensor({ ...past_key_value_desc, writable: true });
+        const seqlens_k_tensor = await context.createTensor({ ...seqlens_k_desc, writable: true });
+
+        // write tensors
+        let query_buffer = randomBuffer(query_desc.dataType, query_desc.shape);
+        let key_buffer = randomBuffer(key_value_desc.dataType, key_value_desc.shape);
+        let value_buffer = randomBuffer(key_value_desc.dataType, key_value_desc.shape);
+        let past_key_buffer = generateBuffer(past_key_value_desc.dataType, past_key_value_desc.shape, 0);
+        let past_value_buffer = generateBuffer(past_key_value_desc.dataType, past_key_value_desc.shape, 0);
+        const seqlens_k_buffer = generateBuffer(seqlens_k_desc.dataType, seqlens_k_desc.shape, seqlens_k_value);
+        const total_seq_len_buffer = generateBuffer(total_seq_len_desc.dataType, total_seq_len_desc.shape, total_seq_len);
+
+        // if (sequence_length == 1) {
+        //   past_key_buffer = pastBuffer(past_key_value_desc.dataType, past_key_value_desc.shape, seqlens_k_value);
+        //   past_value_buffer = pastBuffer(past_key_value_desc.dataType, past_key_value_desc.shape, seqlens_k_value);
+        // }  else {
+        //   query_buffer = pastBuffer(query_key_value_desc.dataType, query_key_value_desc.shape, seqlens_k_value);
+        //   key_buffer = pastBuffer(query_key_value_desc.dataType, query_key_value_desc.shape, seqlens_k_value);
+        //   value_buffer = pastBuffer(query_key_value_desc.dataType, query_key_value_desc.shape, seqlens_k_value);
+        // }
+
+        context.writeTensor(query_tensor, query_buffer);
+        context.writeTensor(key_tensor, key_buffer);
+        context.writeTensor(value_tensor, value_buffer);
+        context.writeTensor(past_key_tensor, past_key_buffer);
+        context.writeTensor(past_value_tensor, past_value_buffer);
+        context.writeTensor(seqlens_k_tensor, seqlens_k_buffer);
+
+        // load graph
+        let query_input = builder.input('query', query_desc);
+        // ONNX: key (optional) : Key with shape (batch_size, kv_sequence_length, kv_hidden_size)
+        let key_input = builder.input('key', key_value_desc);
+        // ONNX: value (optional) : Value with shape (batch_size, kv_sequence_length, kv_hidden_size)
+        let value_input = builder.input('value', key_value_desc);
+        let past_key_input = builder.input('past_key', past_key_value_desc);
+        let past_value_input = builder.input('past_value', past_key_value_desc);
+        let seqlens_k_input = builder.input('seqlens_k', seqlens_k_desc);
+
+        // console.log("Query input: ", query_buffer);
+        // console.log("Key input: ", key_buffer);
+        // console.log("Value input: ", value_buffer);
+        // console.log("Past Key input: ", past_key_buffer);
+        // console.log("Past Value input: ", past_value_buffer);
+
+        if (dataType == 'float16') {
+          query_input = builder.cast(query_input, 'float32');
+          key_input = builder.cast(key_input, 'float32');
+          value_input = builder.cast(value_input, 'float32');
+          past_key_input = builder.cast(past_key_input, 'float32');
+          past_value_input = builder.cast(past_value_input, 'float32');
+        }
+
+        // query -> Shape (/GQA/qkv/shape)
+        const qkv_shape = query_desc.shape;
+        // Shape -> Gather (/GQA/qkv/batch_size)
+        // Shape -> Gather (/GQA/qkv/sequence_length)
+        const qkv_batch_size = qkv_shape[0];
+        const qkv_sequence_length = qkv_shape[1];
+        // Gather -> Concat (/GQA/reshape_output_shape)
+        const reshape_output_shape = [qkv_batch_size, qkv_sequence_length, hidden_size];
+        // Gather -> Concat (/GQA/scatter_indices/reshape)
+        const scatter_indices_shape = [qkv_batch_size, qkv_sequence_length, kv_num_heads, 3];
+        // Gather -> Concat (/GQA/reshape_tensor_shape)
+        const reshape_tensor_shape = [qkv_batch_size, qkv_sequence_length, num_heads, head_size];
+
+        const left = generate_indices(builder, qkv_batch_size, kv_num_heads, qkv_sequence_length);
+        const right = repeat_sequence(builder, qkv_batch_size, kv_num_heads, qkv_sequence_length);
+        // console.log('left shape: ', left.shape);
+        // console.log('right shape: ', right.shape);
+
+        // Concat -> Reshape (/GQA/query/reshape)
+        const reshaped_query = builder.reshape(query_input, reshape_tensor_shape, { label: '/GQA/query/reshape' });
+        // Reshape -> Transpose (/GQA/query/transpose)
+        const new_query = builder.transpose(reshaped_query, { permutation: [0, 2, 1, 3], label: '/GQA/query/transpose' });
+
+        // Gather -> Concat (/GQA/reshape_kv_shape) -> Reshape (/GQA/key/reshape_1)
+        const reshape_kv_shape = [qkv_batch_size, qkv_sequence_length, kv_num_heads, head_size];
+        const key_for_scatter = builder.reshape(key_input, reshape_kv_shape, { label: '/GQA/key/reshape_1' });
+        // value -> Reshape (/GQA/value/reshape_1)
+        const value_for_scatter = builder.reshape(value_input, reshape_kv_shape, { label: '/GQA/value/reshape_1' });
+
+        // Gather -> Less (/GQA/scatter/condition)
+        const condition_buffer = new Uint8Array(1);
+        if (1 < qkv_sequence_length) {
+          condition_buffer.set([1]);
+        }
+        const scatter_condition = builder.constant({ dataType: 'uint8', shape: [1] }, condition_buffer);
+        const value_zero = builder.constant({ dataType: 'int32', shape: [1] }, new Int32Array(1));
+        // Less -> Where (/GQA/scatter/where)
+        const scatter_pos = builder.where(scatter_condition, value_zero, seqlens_k_input, { label: '/GQA/scatter/where' });
+        // Where -> Add (/GQA/reshaped_qkv_sequence_length_shape/add)
+        const reshaped_qkv_sequence_length_shape_plus = builder.add(right, scatter_pos, { label: '/GQA/reshaped_qkv_sequence_length_shape/add' });
+        // Add -> Concat (/GQA/scatter)
+        const pre_scatter_indices = builder.concat(
+          [left, reshaped_qkv_sequence_length_shape_plus
+          ], 1, { label: '/GQA/scatter' });
+        // Concat -> Reshape (/GQA/pre_scatter_indices/reshape)
+        const scatter_indices = builder.reshape(pre_scatter_indices, scatter_indices_shape, { 'label': '/GQA/pre_scatter_indices/reshape' });
+        // console.log('scatter_indices: ', scatter_indices);
+
+        // Concat -> ScatterND (/GQA/present_key/ScatterND)
+        let present_key = builder.scatterND(past_key_input, builder.cast(scatter_indices, 'int32'), key_for_scatter, { label: '/GQA/present_key/ScatterND' });
+        // Reshape -> ScatterND (/GQA/present_value/ScatterND)
+        let present_value = builder.scatterND(past_value_input, builder.cast(scatter_indices, 'int32'), value_for_scatter, { label: '/GQA/present_value/ScatterND' });
+        // console.log('present_key shape: ', present_key.shape);
+        // console.log('present_value shape: ', present_value.shape);
+
+        let true_present_key = present_key;
+        let true_present_value = present_value;
+
+        if (group_size != 1) {
+          const group_broadcast_tensor_shape_1 = [batch_size, kv_num_heads, 1, past_sequence_length, head_size];
+          const group_broadcast_tensor_shape_2 = [batch_size, kv_num_heads, group_size, past_sequence_length, head_size];
+          const group_broadcast_tensor_shape_3 = [batch_size, num_heads, past_sequence_length, head_size];
+          true_present_key = builder.reshape(true_present_key, group_broadcast_tensor_shape_1, { 'label': '/GQA/true_present_key/reshape_1' });
+          true_present_key = builder.expand(true_present_key, group_broadcast_tensor_shape_2, { 'label': '/GQA/true_present_key/expand' });
+          true_present_key = builder.reshape(true_present_key, group_broadcast_tensor_shape_3, { 'label': '/GQA/true_present_key/reshape_2' });
+
+          true_present_value = builder.reshape(true_present_value, group_broadcast_tensor_shape_1, { 'label': '/GQA/true_present_value/reshape_1' });
+          true_present_value = builder.expand(true_present_value, group_broadcast_tensor_shape_2, { 'label': '/GQA/true_present_value/expand' });
+          true_present_value = builder.reshape(true_present_value, group_broadcast_tensor_shape_3, { 'label': '/GQA/true_present_value/reshape_2' });
+        }
+
+        // ScatterND -> Transpose (/GQA/present_key/transpose)
+        true_present_key = builder.transpose(true_present_key, { permutation: [0, 1, 3, 2], label: '/GQA/present_key/transpose' });
+
+        // Transpose -> MatMul (/GQA/qkv/matmul_1)
+        const matmul_output = builder.matmul(new_query, true_present_key, { label: '/GQA/qkv/matmul_1' });
+
+        // past_key -> Shape (/GQA/past_key/shape) (start: -1) (i.e. head_size)
+        // Shape -> Cast () (to: float32)
+        // Cast -> Sqrt (/GQA/past_key/sqrt) (sqrt(head_size))
+        const scale = Math.sqrt(head_size);
+
+        // MatMul -> Div (/GQA/qkv/div)
+        const scale_constant = builder.constant({ dataType: 'float32', shape: [] }, generateBuffer('float32', [1], scale));
+        const div_output = builder.div(matmul_output, scale_constant, { label: '/GQA/qkv/div' });
+
+        // shape of MatMul (/GQA/qkv/matmul_1):
+        // [qkv_batch_size, num_heads, qkv_sequence_length, head_size] X [batch_size, num_heads, head_size, past_sequence_length]
+        //= [batch_size, num_heads, qkv_sequence_length, past_sequence_length]
+        // Div -> Shape -> ConstantOfShape (/GQA/attn_mask/one_of_mask_shape)
+        const mask_shape_ones_shape = [batch_size, num_heads, qkv_sequence_length, past_sequence_length];
+        const mask_shape_ones = builder.constant({ dataType: 'int32', shape: mask_shape_ones_shape }, generateBuffer('int32', mask_shape_ones_shape, 1));
+        // ConstantOfShape -> CumSum (range_of_mask_shape), axis=-1
+        const neq_left = builder.cumulativeSum(mask_shape_ones, 3, { exclusive: true, reversed: false, label: 'range_of_mask_shape' });
+        // console.log('neq_left shape: ', neq_left.shape);
+        // Shape -> Gather (/GQA/past_kv_lens)
+        const past_kv_lens = past_sequence_length;
+        // Gather -> Concat (/GQA/range_of_qkv_sequence_length/concat)
+        const reshape_pre_neq_right = [past_kv_lens, qkv_sequence_length];
+        // ConstantOfShape -> CumSum (/GQA/attn_mask/range_of_qkv_sequence_length)
+        const _pre_neq_right_data = cumsum(qkv_sequence_length, false);
+        const _pre_neq_right_buffer = new Int32Array(qkv_sequence_length);
+        _pre_neq_right_buffer.set(_pre_neq_right_data);
+        const _pre_neq_right = builder.constant({ dataType: 'int32', shape: [qkv_sequence_length] }, _pre_neq_right_buffer);
+        // CumSum  -> Add (/GQA/attn_mask/add)
+        const pre_neq_right = builder.add(_pre_neq_right, scatter_pos, { label: '/GQA/attn_mask/add' });
+        // Add -> Expand (/GQA/expand_neq_right)
+        const expanded_neq_right = builder.expand(pre_neq_right, reshape_pre_neq_right, { label: '/GQA/expand_neq_right' });
+        // Expand -> Transpose (/GQA/neq_right/transpose) (1, 0)
+        const neq_right = builder.transpose(expanded_neq_right, { label: '/GQA/neq_right/transpose' });
+
+
+        // CumSum -> Less (/GQA/attn_mask/condition)
+        const condition = builder.lesser(neq_left, neq_right, { label: '/GQA/attn_mask/condition' });
+
+        // Less -> Where (/GQA/attn_mask/where)
+        const value_one = builder.constant({ dataType: 'float32', shape: [] }, generateBuffer('float32', [1], 1.0));
+        //TODO: check fp16's min value
+        // const finfo_min = builder.constant({dataType: 'float32', shape: []}, generateBuffer('float32', [1], -3.4028234663852886e+38));
+        const finfo_min = builder.constant({ dataType: 'float32', shape: [] }, generateBuffer('float32', [1], -10000.0));
+        const attn_mask = builder.where(condition, value_one, finfo_min, { label: '/GQA/attn_mask/where' });
+
+        // Where -> Add (/GQA/attn_mask/softmax_input)
+        const softmax_input = builder.add(div_output, attn_mask, { label: '/GQA/attn_mask/softmax_input' });
+        // Add -> Softmax (/GQA/qkv/softmax) (axis: -1)
+        const softmax_output = builder.softmax(softmax_input, 3, { label: '/GQA/qkv/softmax' });
+
+        // Softmax -> MatMul (/GQA/qkv/matmul_2)
+        const attn_output = builder.matmul(softmax_output, true_present_value, { label: '/GQA/qkv/matmul_2' });
+        // MatMul -> Transpose (/GQA/qkv/transpose)
+        const transposed_attn_output = builder.transpose(attn_output, { permutation: [0, 2, 1, 3], label: '/GQA/qkv/transpose' });
+        // Transpose -> Reshape (/GQA/qkv/reshape)
+        let output = builder.reshape(transposed_attn_output, reshape_output_shape, { label: '/GQA/qkv/reshape' });
+        // console.log('output shape: ', output.shape);
+
+        if (dataType == 'float16') {
+          output = builder.cast(output, 'float16');
+          present_key = builder.cast(present_key, 'float16');
+          present_value = builder.cast(present_value, 'float16');
+
+          // output = builder.cast(output, 'float32');
+          // present_key = builder.cast(present_key, 'float32');
+          // present_value = builder.cast(present_value, 'float32');
+        }
+
+        // build WebNN graph
+        const graph = await builder.build({
+          'output': output,
+          'present_key': present_key,
+          'present_value': present_value
+        });
+
+        // compute WebNN graph
+        const output_desc = {
+          dataType,
+          shape: [batch_size, sequence_length, hidden_size],
+          readable: true,
+        };
+        const present_kv_desc = {
+          dataType,
+          shape: [batch_size, kv_num_heads, total_sequence_length, head_size],
+          readable: true,
+        }
+        const output_tensor = await context.createTensor(output_desc);
+        const present_key_tensor = await context.createTensor(present_kv_desc);
+        const present_value_tensor = await context.createTensor(present_kv_desc);
+        const inputs = {
+          'query': query_tensor,
+          'key': key_tensor,
+          'value': value_tensor,
+          'past_key': past_key_tensor,
+          'past_value': past_value_tensor,
+          'seqlens_k': seqlens_k_tensor,
+        };
+        const outputs = {
+          'output': output_tensor,
+          'present_key': present_key_tensor,
+          'present_value': present_value_tensor
+        };
+
+        let output_result;
+        let present_key_result;
+        let present_value_result;
+        for (let i = 0; i < 1; i++) {
+          context.dispatch(graph, inputs, outputs);
+          output_result = await context.readTensor(output_tensor);
+          present_key_result = await context.readTensor(present_key_tensor);
+          present_value_result = await context.readTensor(present_value_tensor);
+          log(`run time: ${i}`);
+        }
+
+        if (dataType == 'float16') {
+          output_result = new Float16Array(output_result);
+          present_key_result = new Float16Array(present_key_result);
+          present_value_result = new Float16Array(present_value_result);
+        } else {
+          output_result = new Float32Array(output_result);
+          present_key_result = new Float32Array(present_key_result);
+          present_value_result = new Float32Array(present_value_result);
+        }
+
+        // console.log('output: ', output_result);
+        // console.log('key: ', present_key_result);
+        // console.log('value: ', present_value_result);
+
+        let model_path;
+        if (group_size == 8) {
+          if (dataType == 'float16') {
+            model_path = './models/GQA_group_fp16_const.onnx';
+          } else {
+            model_path = './models/GQA_group_const.onnx';
+          }
+        } else {
+          if (dataType == 'float16') {
+            model_path = './models/GQA_fp16_const.onnx';
+          } else {
+            model_path = './models/GQA_const.onnx';
+          }
+        }
+
+        const sess = await ort.InferenceSession.create(model_path);
+        let feed = {};
+        feed['query'] = new ort.Tensor(dataType, query_buffer, query_desc.shape);
+        feed['key'] = new ort.Tensor(dataType, key_buffer, key_value_desc.shape);
+        feed['value'] = new ort.Tensor(dataType, value_buffer, key_value_desc.shape);
+        feed['past_key'] = new ort.Tensor(dataType, past_key_buffer, past_key_value_desc.shape);
+        feed['past_value'] = new ort.Tensor(dataType, past_value_buffer, past_key_value_desc.shape);
+        feed['seqlens_k'] = new ort.Tensor('int32', seqlens_k_buffer, seqlens_k_desc.shape);
+        const ort_result = await sess.run(feed);
+
+        let difference = output_result.map((x, i) => Math.abs(x - ort_result['output'].data[i]))
+        console.log("output diff: ", difference.sort().reverse())
+        difference = present_key_result.map((x, i) => Math.abs(x - ort_result['present_key'].data[i]))
+        console.log(`key diff: `, difference.sort().reverse());
+        difference = present_value_result.map((x, i) => Math.abs(x - ort_result['present_value'].data[i]))
+        console.log(`value diff: `, difference.sort().reverse());
+        log('Done.');
+      } catch (e) {
+        log(e);
+      }
+    }
+    const runBtn = document.getElementById("run");
+    runBtn.onclick = async () => {
+      // dataType: "float32" / "float16"; 
+      // sequence_length: Prefill 256 / Decode 1;
+      // group_size: group_query 8 / single_query 1;
+      const dataType = getQueryVariable('dataType', 'float32');
+      const sequence_length = parseInt(getQueryVariable('sequence_length', 1));
+      const group_size = parseInt(getQueryVariable('group_size',8));
+      console.log("dataType: ", dataType);
+      console.log("sequence_length: ", sequence_length);
+      console.log("group_size: ", group_size);
+      await run(dataType, sequence_length, group_size); 
+    };
+
+    function generateBuffer(dataType, shape, value) {
+      let buffer;
+      const size = sizeOfShape(shape);
+      switch (dataType) {
+        case 'float32':
+          buffer = new Float32Array(size).fill(value);
+          break;
+        case 'float16':
+          buffer = new Float16Array(size).fill(toFloat16(value));
+          break;
+        case 'int32':
+          buffer = new Int32Array(size).fill(value);
+          break;
+        case 'int64':
+          buffer = new BigInt64Array(size).fill(BigInt(value));
+          break;
+        default:
+          throw new Error('Unsupported data type');
+      }
+      return buffer;
+    }
+    function randomBuffer(dataType, shape) {
+      let buffer;
+      const size = sizeOfShape(shape);
+      switch (dataType) {
+        case 'float32':
+          buffer = new Float32Array(size);
+          for (let i = 0; i < size; i++) {
+            buffer[i] = Math.random();
+          }
+          break;
+        case 'float16':
+          buffer = new Float16Array(size);
+          for (let i = 0; i < size; i++) {
+            buffer[i] = toFloat16(Math.random());
+          }
+          break;
+        default:
+          throw new Error('Unsupported data type');
+      }
+
+      return buffer;
+    }
+    function pastBuffer(dataType, shape, k) {
+      let buffer;
+      const size = sizeOfShape(shape);
+      switch (dataType) {
+        case 'float32':
+          buffer = new Float32Array(size);
+          for (let i = 0; i < size; i++) {
+            buffer[i] = 0;
+          }
+          for (let i = 0; i < shape[0]; i++) {
+            for (let j = 0; j < shape[1]; j++) {
+              for (let l = 0; l < k; l++) {
+                for (let m = 0; m < shape[3]; m++) {
+                  buffer[i * shape[1] * shape[2] * shape[3] + j * shape[2] * shape[3] + l * shape[3] + m] = Math.random();
+                }
+              }
+            }
+          }
+          break;
+        case 'float16':
+          buffer = new Float16Array(size);
+          for (let i = 0; i < size; i++) {
+            buffer[i] = 0;
+          }
+          for (let i = 0; i < shape[0]; i++) {
+            for (let j = 0; j < shape[1]; j++) {
+              for (let l = 0; l < k; l++) {
+                for (let m = 0; m < shape[3]; m++) {
+                  buffer[i * shape[1] * shape[2] * shape[3] + j * shape[2] * shape[3] + l * shape[3] + m] = toFloat16(Math.random());
+                }
+              }
+            }
+          }
+          break;
+        default:
+          throw new Error('Unsupported data type');
+      }
+
+      return buffer;
+    }
+
+    function cumsum(size, exclusive) {
+      const output = [];
+      for (let i = 0; i < size; i++) {
+        if (exclusive) {
+          output.push(i);
+        } else {
+          output.push(i + 1);
+        }
+      }
+      return output;
+    }
+    function generate_indices(builder, batch_size, num_heads, sequence_length) {
+      const num_elements = sizeOfShape([2 * batch_size * num_heads * sequence_length]);
+      // Expand shape
+      const input = Array.from({ length: 2 * batch_size * num_heads * sequence_length }, () => 0);
+      for (let i = 0; i < sequence_length; i++) {
+        for (let j = 0; j < batch_size; j++) {
+          for (let k = 0; k < num_heads; k++) {
+            input[2 * i * batch_size * num_heads + 2 * j * num_heads + 2 * k] = j;
+            input[2 * i * batch_size * num_heads + 2 * j * num_heads + 2 * k + 1] = k;
+          }
+        }
+      }
+      const buffer = new Int32Array(num_elements);
+      buffer.set(input);
+      const new_shape = [batch_size * sequence_length * num_heads, 2];
+      return builder.constant({ dataType: 'int32', shape: new_shape }, buffer);
+    }
+    function repeat_sequence(builder, batch_size, num_heads, sequence_length) {
+      const num_elements = sizeOfShape([batch_size * num_heads * sequence_length]);
+      // Expand shape
+      const input = Array.from({ length: batch_size * num_heads * sequence_length }, () => 0);
+      for (let i = 0; i < sequence_length; i++) {
+        for (let j = 0; j < batch_size; j++) {
+          for (let k = 0; k < num_heads; k++) {
+            input[i * batch_size * num_heads + j * num_heads + k] = i;
+          }
+        }
+      }
+      const buffer = new Int32Array(num_elements);
+      buffer.set(input);
+      const new_shape = [batch_size * sequence_length * num_heads, 1];
+      return builder.constant({ dataType: 'int32', shape: new_shape }, buffer);
+    }
+    function flatten(array) {
+      return array.reduce((acc, val) => acc.concat(Array.isArray(val) ? flatten(val) : val), []);
+    }
+    function toFloat16(value) {
+      // 将 double 转换为 float16 的近似值
+      const buffer = new ArrayBuffer(4);
+      const view = new DataView(buffer);
+      view.setFloat32(0, value, true); // 将 double 转换为 float32
+      const float32Bits = view.getUint32(0, true); // 获取 float32 的位表示
+      const sign = float32Bits & 0x80000000; // 符号位
+      const mantissa = float32Bits & 0x007FFFFF; // 尾数部分
+      let exponent = (float32Bits & 0x7F800000) >> 23; // 指数部分
+
+      if (exponent === 0) {
+        // 非规格化数
+        if (mantissa === 0) {
+          return 0.0; // 零
+        } else {
+          // 转换为规格化数
+          exponent = 127; // 最小的规格化指数
+          while ((mantissa & 0x800000) === 0) {
+            mantissa <<= 1;
+            exponent--;
+          }
+          mantissa &= 0x7FFFFF;
+        }
+      } else if (exponent !== 255) {
+        // 规格化数
+        exponent -= 127; // 调整指数偏移
+      } else {
+        // NaN 或无穷大
+        return value; // 直接返回原始值
+      }
+
+      // 转换为 float16
+      exponent = Math.max(-14, Math.min(15, exponent)); // 限制在 float16 的范围内
+      const float16Bits = (sign >> 16) | ((exponent + 15) << 10) | (mantissa >> 13); // 组合 float16 的位表示
+      view.setUint16(0, float16Bits, true); // 设置 float16 的位表示
+      return view.getFloat32(0, true); // 返回 float16 的近似值
+    }
+
+    function getQueryVariable(name, defaults) {
+        const query = window.location.search.substring(1);
+        let vars = query.split("&");
+        for (var i = 0; i < vars.length; i++) {
+            let pair = vars[i].split("=");
+            if (pair[0] == name) {
+                return pair[1];
+            }
+        }
+        return defaults;
+    };
+
+  </script>
+</body>
+
+</html>

@@ -74,13 +74,14 @@ In onnxruntime, we create a pull request: https://github.com/microsoft/onnxrunti
 ## Test Example
 Github Pages: https://peishenyan.github.io/gqa_webnn/
 1. [`gqa.html`](https://peishenyan.github.io/gqa_webnn/gqa.html) uses WebNN api to compute GQA in a decomposed graph, compared to onnxruntime-web CPU EP execution result of a GQA onnx graph.
-2. [`benchmark_GQA_prefill.html`](https://peishenyan.github.io/gqa_webnn/benchmark_GQA_prefill.html) and [`benchmark_GQA_decode.html`](https://peishenyan.github.io/gqa_webnn/benchmark_GQA_decode.html) are two test cases for prefilling and decoding stages of a GQA onnx graph, comparing the results of onnxruntime WebNN EP and CPU EP. 
-
-3. [`gqa_group.html`](https://peishenyan.github.io/gqa_webnn/gqa_group.html?dataType=float32&sequence_length=1&group_size=1) uses WebNN api to compute GQA in a decomposed graph, compared to onnxruntime-web CPU EP execution result of a GQA onnx graph. You can use different arguments to test for different scenarios:
+2. [`gqa_group.html`](https://peishenyan.github.io/gqa_webnn/gqa_group.html?dataType=float32&sequence_length=1&group_size=1) uses WebNN api to compute GQA in a decomposed graph, compared to onnxruntime-web CPU EP execution result of a GQA onnx graph. You can use different arguments to test for different scenarios:
 ```
 dataType: "float32" / "float16"; 
 sequence_length: 256 (Prefill) / 1 (Decode);
 group_size: 8 (group_query) / 1 (single_query);
 ```
+3. [`webnn_ep_gqa_test.html`](https://peishenyan.github.io/gqa_webnn/webnn_ep_gqa_test.html) compares the results of onnxruntime-web WebN EP and CPU EP for prefilling and decoding stages of a GQA onnx graph. You can use different arguments to test for different scenarios as mentioned above.
+4. [`benchmark_GQA_prefill.html`](https://peishenyan.github.io/gqa_webnn/benchmark_GQA_prefill.html) and [`benchmark_GQA_decode.html`](https://peishenyan.github.io/gqa_webnn/benchmark_GQA_decode.html) are two test cases for prefilling and decoding stages of a GQA onnx graph, comparing the results of onnxruntime WebNN EP and CPU EP. 
+
 ## Decomposed Graph of GQA
 `models/GQA_decomposed_seq_25.onnx` and `models/GQA_decomposed_seq_1.onnx` are the decomposed graphs of the GQA operator in the prefilling and decoding stages, respectively.

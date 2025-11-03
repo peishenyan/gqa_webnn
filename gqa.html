@@ -46,7 +46,7 @@
   </div>
   <div id="status" style="font: 1em sans-serif"></div>
   <!-- <script src="../onnxruntime-web/dist/ort.all.js"></script> -->
-  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.all.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.jspi.js"></script>
   <script type="module">
     import {buildConstantByNpy, toHalf, sizeOfShape} from './utils.js';
 
@@ -108,19 +108,23 @@
         const seqlens_k_tensor = await context.createTensor({...seqlens_k_desc, writable: true});
         
         // write tensors
-        const query_buffer = randomBuffer(query_key_value_desc.dataType, query_key_value_desc.shape);
-        const key_buffer = randomBuffer(query_key_value_desc.dataType, query_key_value_desc.shape);
-        const value_buffer = randomBuffer(query_key_value_desc.dataType, query_key_value_desc.shape);
-        const past_key_buffer = generateBuffer(past_key_value_desc.dataType, past_key_value_desc.shape, 0);
-        const past_value_buffer = generateBuffer(past_key_value_desc.dataType, past_key_value_desc.shape, 0);
+        let query_buffer = randomBuffer(query_key_value_desc.dataType, query_key_value_desc.shape);
+        let key_buffer = randomBuffer(query_key_value_desc.dataType, query_key_value_desc.shape);
+        let value_buffer = randomBuffer(query_key_value_desc.dataType, query_key_value_desc.shape);
+        let past_key_buffer = generateBuffer(past_key_value_desc.dataType, past_key_value_desc.shape, 0);
+        let past_value_buffer = generateBuffer(past_key_value_desc.dataType, past_key_value_desc.shape, 0);
         const seqlens_k_buffer = generateBuffer(seqlens_k_desc.dataType, seqlens_k_desc.shape, seqlens_k_value);
         const total_seq_len_buffer = generateBuffer(total_seq_len_desc.dataType, total_seq_len_desc.shape, total_seq_len);
-        if (sequence_length == 1) {
-          const past_key_data = new Array(seqlens_k_value).fill(Math.random());
-          past_key_buffer.set(past_key_data);
-          const past_value_data = new Array(seqlens_k_value).fill(Math.random());
-          past_value_buffer.set(past_value_data);
-        }
+         
+        // if (sequence_length == 1) {
+        //   past_key_buffer = pastBuffer(past_key_value_desc.dataType, past_key_value_desc.shape, seqlens_k_value);
+        //   past_value_buffer = pastBuffer(past_key_value_desc.dataType, past_key_value_desc.shape, seqlens_k_value);
+        // }  else {
+        //   query_buffer = pastBuffer(query_key_value_desc.dataType, query_key_value_desc.shape, seqlens_k_value);
+        //   key_buffer = pastBuffer(query_key_value_desc.dataType, query_key_value_desc.shape, seqlens_k_value);
+        //   value_buffer = pastBuffer(query_key_value_desc.dataType, query_key_value_desc.shape, seqlens_k_value);
+        // }
+
         context.writeTensor(query_tensor, query_buffer);
         context.writeTensor(key_tensor, key_buffer);
         context.writeTensor(value_tensor, value_buffer);
@@ -137,6 +141,20 @@
         let past_key_input = builder.input('past_key', past_key_value_desc);
         let past_value_input = builder.input('past_value', past_key_value_desc);
         let seqlens_k_input = builder.input('seqlens_k', seqlens_k_desc);
+
+        console.log("Query input: ", query_buffer);
+        console.log("Key input: ", key_buffer);
+        console.log("Value input: ", value_buffer);
+        console.log("Past Key input: ", past_key_buffer);
+        console.log("Past Value input: ", past_value_buffer);
+
+        if (dataType == 'float16') {
+          query_input = builder.cast(query_input, 'float32');
+          key_input = builder.cast(key_input, 'float32');
+          value_input = builder.cast(value_input, 'float32');
+          past_key_input = builder.cast(past_key_input, 'float32');
+          past_value_input = builder.cast(past_value_input, 'float32');
+        }
 
         // query -> Shape (/GQA/qkv/shape)
         const qkv_shape = query_key_value_desc.shape;
@@ -193,9 +211,9 @@
         console.log('scatter_indices: ', scatter_indices);
         
         // Concat -> ScatterND (/GQA/present_key/ScatterND)
-        const present_key = builder.scatterND(past_key_input, builder.cast(scatter_indices, 'int32'), key_for_scatter, {label: '/GQA/present_key/ScatterND'});
+        let present_key = builder.scatterND(past_key_input, builder.cast(scatter_indices, 'int32'), key_for_scatter, {label: '/GQA/present_key/ScatterND'});
         // Reshape -> ScatterND (/GQA/present_value/ScatterND)
-        const present_value = builder.scatterND(past_value_input, builder.cast(scatter_indices, 'int32'), value_for_scatter, {label: '/GQA/present_value/ScatterND'});
+        let present_value = builder.scatterND(past_value_input, builder.cast(scatter_indices, 'int32'), value_for_scatter, {label: '/GQA/present_value/ScatterND'});
         console.log('present_key shape: ', present_key.shape);
         console.log('present_value shape: ', present_value.shape);
         
@@ -211,7 +229,7 @@
         const scale = Math.sqrt(head_size);
 
         // MatMul -> Div (/GQA/qkv/div)
-        const scale_constant = builder.constant({dataType, shape: []}, generateBuffer(dataType, [1], scale));
+        const scale_constant = builder.constant({dataType: 'float32', shape: []}, generateBuffer('float32', [1], scale));
         const div_output = builder.div(matmul_output, scale_constant, {label: '/GQA/qkv/div'});
 
         // shape of MatMul (/GQA/qkv/matmul_1):
@@ -244,9 +262,10 @@
         const condition = builder.lesser(neq_left, neq_right, {label: '/GQA/attn_mask/condition'});
 
         // Less -> Where (/GQA/attn_mask/where)
-        const value_one = builder.constant({dataType, shape: []}, generateBuffer(dataType, [1], 1));
+        const value_one = builder.constant({dataType: 'float32', shape: []}, generateBuffer('float32', [1], 1.0));
         //TODO: check fp16's min value
-        const finfo_min = builder.constant({dataType, shape: []}, generateBuffer(dataType, [1], -3.4028234663852886e+38));
+        const finfo_min = builder.constant({dataType: 'float32', shape: []}, generateBuffer('float32', [1], -3.4028234663852886e+38));
+        // const finfo_min = builder.constant({dataType: 'float32', shape: []}, generateBuffer(dataType, [1], -65500.0));
         const attn_mask = builder.where(condition, value_one, finfo_min, {label: '/GQA/attn_mask/where'});
 
         // Where -> Add (/GQA/attn_mask/softmax_input)
@@ -263,7 +282,9 @@
         console.log('output shape: ', output.shape);
       
         if (dataType == 'float16') {
-          output = builder.cast(output, 'float32');
+          output = builder.cast(output, 'float16');
+          present_key = builder.cast(present_key, 'float16');
+          present_value = builder.cast(present_value, 'float16');
         }
 
         // build WebNN graph
@@ -313,9 +334,9 @@
         }
 
         if (dataType == 'float16') {
-          output_result = new Uint16Array(output_result);
-          present_key_result = new Uint16Array(present_key_result);
-          present_value_result = new Uint16Array(present_value_result);
+          output_result = new Float16Array(output_result);
+          present_key_result = new Float16Array(present_key_result);
+          present_value_result = new Float16Array(present_value_result);
         } else {
           output_result = new Float32Array(output_result);
           present_key_result = new Float32Array(present_key_result);
@@ -326,15 +347,15 @@
         console.log('value: ', present_value_result);
 
 
-        const sess = await ort.InferenceSession.create('./models/GQA.onnx');
+        const sess = await ort.InferenceSession.create('./models/GQA_fp16.onnx');
         let feed = {};
-        feed['query'] = new ort.Tensor('float32', query_buffer, query_key_value_desc.shape);
-        feed['key'] = new ort.Tensor('float32', key_buffer, query_key_value_desc.shape);
-        feed['value'] = new ort.Tensor('float32', value_buffer, query_key_value_desc.shape);
-        feed['past_key'] = new ort.Tensor('float32', past_key_buffer, past_key_value_desc.shape);
-        feed['past_value'] = new ort.Tensor('float32', past_value_buffer, past_key_value_desc.shape);
+        feed['query'] = new ort.Tensor(dataType, query_buffer, query_key_value_desc.shape);
+        feed['key'] = new ort.Tensor(dataType, key_buffer, query_key_value_desc.shape);
+        feed['value'] = new ort.Tensor(dataType, value_buffer, query_key_value_desc.shape);
+        feed['past_key'] = new ort.Tensor(dataType, past_key_buffer, past_key_value_desc.shape);
+        feed['past_value'] = new ort.Tensor(dataType, past_value_buffer, past_key_value_desc.shape);
         feed['seqlens_k'] = new ort.Tensor('int32', seqlens_k_buffer, seqlens_k_desc.shape);
-        feed['total_seq_len'] = new ort.Tensor('int32', total_seq_len_buffer, total_seq_len_desc.shape);
+        feed['total_sequence_length'] = new ort.Tensor('int32', total_seq_len_buffer, total_seq_len_desc.shape);
         const ort_result = await sess.run(feed);
 
         console.log('wasm result 1 output: ', ort_result['output'].data);
@@ -346,18 +367,18 @@
           ...output_result.map((v, i) => Math.abs(v - ort_result['output'].data[i]))
         );
         let difference = output_result.map((x, i) => Math.abs(x - ort_result['output'].data[i]))
-        console.log(`output max diff: ${output_max_diff}`, difference.sort());
+        console.log(`output max diff: ${output_max_diff}`, difference.sort().reverse());
         
         difference = present_key_result.map((x, i) => Math.abs(x - ort_result['present_key'].data[i]))
         // const key_max_diff = Math.max(
         //   ...present_key_result.map((v, i) => Math.abs(v - ort_result['present_key'].data[i]))
         // );
-        console.log(`key diff: `, difference.sort());
+        console.log(`key diff: `, difference.sort().reverse());
         difference = present_value_result.map((x, i) => Math.abs(x - ort_result['present_value'].data[i]))
         // const value_diff = Math.max(
         //   ...present_value_result.map((v, i) => Math.abs(v - ort_result['present_value'].data[i]))
         // );
-        console.log(`value diff: `, difference.sort());
+        console.log(`value diff: `, difference.sort().reverse());
         // console.log(`value diff: ${value_diff}`);
         log('Done.');
       } catch (e) {
@@ -366,7 +387,7 @@
     }
     const runBtn = document.getElementById("run");
     runBtn.onclick = async () => {
-      await run('float32', 35);
+      await run('float16', 25);
     };
 
     function generateBuffer(dataType, shape, value) {
@@ -377,7 +398,7 @@
           buffer = new Float32Array(size).fill(value);
           break;
         case 'float16':
-          buffer = new Uint16Array(size).fill(toHalf(value));
+          buffer = new Float16Array(size).fill(toHalf(value));
           break;
         case 'int32':
           buffer = new Int32Array(size).fill(value);
@@ -401,9 +422,49 @@
           }
           break;
         case 'float16':
-          buffer = new Uint16Array(size);
+          buffer = new Float16Array(size);
           for (let i = 0; i < size; i++) {
             buffer[i] = toHalf(Math.random());
+          }
+          break;
+        default:
+          throw new Error('Unsupported data type');
+      }
+
+      return buffer;
+    }
+    function pastBuffer(dataType, shape, k) {
+      let buffer;
+      const size = sizeOfShape(shape);
+      switch(dataType) {
+        case 'float32':
+          buffer = new Float32Array(size);
+          for (let i = 0; i < size; i++) {
+            buffer[i] = 0;
+          }
+          for(let i = 0; i < shape[0]; i++) {
+              for(let j = 0; j < shape[1]; j++) {
+                  for(let l = 0; l < k; l++) {
+                      for(let m = 0; m < shape[3]; m++) {
+                        buffer[i*shape[1]*shape[2]*shape[3]+j*shape[2]*shape[3]+l*shape[3]+m] = Math.random();
+                      }                            
+                  }
+              }
+          }
+          break;
+        case 'float16':
+          buffer = new Float16Array(size);
+          for (let i = 0; i < size; i++) {
+            buffer[i] = toHalf(Math.random());
+          }
+          for(let i = 0; i < shape[0]; i++) {
+              for(let j = 0; j < shape[1]; j++) {
+                  for(let l = 0; l < k; l++) {
+                      for(let m = 0; m < shape[3]; m++) {
+                        buffer[i*shape[1]*shape[2]*shape[3]+j*shape[2]*shape[3]+l*shape[3]+m] = toHalf(Math.random());
+                      }                            
+                  }
+              }
           }
           break;
         default:

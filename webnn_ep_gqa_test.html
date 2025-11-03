@@ -68,9 +68,19 @@
             <option value="Decoding">Decoding</option>
         </select>
     </fieldset>
+
+    <fieldset>
+        <legend></legend>
+        <label for="sliding">Local Window Size:</label>
+        <select id="sliding">
+            <option value="-1">-1</option>
+            <option value="16">16</option>
+        </select>
+    </fieldset>
+
     <button id="start">Start</button>
     <p id="log"></p>
-    <script src="./onnxruntime-web/dist/ort.all.min.js"></script>
+    <script src="./onnxruntime-web/dist/ort.jspi.js"></script>
     <script>
 
         ort.env.wasm.simd = true;
@@ -79,13 +89,14 @@
 
         const log = document.getElementById('log');
 
-        async function run(model_path, input, outputs, dim, dataType, stage) {
+        async function run(model_path, input, outputs, dim, dataType, stage, sliding_window) {
             log.innerHTML = 'start running model ' + model_path + "<br>";
             var feeds = {};
             let inputTensor;
 
             for (let index = 0; index < input.length; index++) {
                 const element = input[index];
+                console.log(index, element);
                 const dim_ = dim[index];
                 if (index > 4) {
                     if (index == 5) {
@@ -111,7 +122,7 @@
                     inputTensor = new ort.Tensor(
                         dataType,
                         // new Float32Array(genPastArr(dim_, 25)),
-                        stage === "Decoding" ? generateBuffer(dataType, dim_, 0) : pastBuffer(dataType, dim_, 25),
+                        stage === "Decoding" ? randomBuffer(dataType, dim_) : pastBuffer(dataType, dim_, 25),
                         dim_
                     );
                 }
@@ -152,7 +163,7 @@
             log.innerHTML += "Run done.";
         };
 
-        async function main(dataType, queryType, stage) {
+        async function main(dataType, queryType, stage, sliding_window) {
             let model_path = "./models/GQA_";
             const input = ['query', 'key', 'value', 'past_key', 'past_value', 'seqlens_k'];
             const outputs = ['output', 'present_key', 'present_value'];
@@ -174,8 +185,12 @@
             if (dataType === "float16") {
                 model_path += "fp16_";
             }
-            model_path += "const.onnx";
-            await run(model_path, input, outputs, dim, dataType, stage);
+            if (sliding_window === "-1") {
+                model_path += "const.onnx";
+            } else {
+                model_path += "local.onnx";
+            }
+            await run(model_path, input, outputs, dim, dataType, stage, sliding_window);
         }
 
         const start = document.getElementById('start');
@@ -183,7 +198,8 @@
             const dataType = document.getElementById('dataType').value;
             const queryType = document.getElementById('queryType').value;
             const stage = document.getElementById('stage').value;
-            await main(dataType, queryType, stage);
+            const sliding_window = document.getElementById('sliding').value;
+            await main(dataType, queryType, stage, sliding_window);
         };
 
         function sizeOfShape(shape) {
